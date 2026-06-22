@@ -21,10 +21,13 @@ while i < 6:
             weakness = data2["damage_relations"]["double_damage_from"]
         
             for t in weakness:
-                print("weakness is: " + t["name"])
+                current_weakness = t["name"]
+                if current_weakness not in weaknesses:
+                    weaknesses.append(t["name"])
             
 
         team.append(name)
         
-        
+        i += 1
 print(team)
+print(weaknesses)
