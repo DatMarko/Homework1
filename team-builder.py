@@ -1,123 +1,103 @@
 import requests
 
-# Build a team of up to 6 Pokémon and summarize common weaknesses.
-# This script queries the public PokeAPI to get each Pokémon's types,
-# then looks up type damage relations to compute damage multipliers.
 
-# Counter for how many Pokémon are weak to each type (counts 2x and 4x only)
-weakness_count = {}
+def get_pokemon_multipliers(pokemon_name):
+    """Return damage multipliers for each attacking type against a Pokémon."""
+    normalized_name = pokemon_name.strip().lower()
+    response = requests.get(
+        f"https://pokeapi.co/api/v2/pokemon/{normalized_name}",
+        timeout=10,
+    )
+    response.raise_for_status()
 
-# Separate counter for when a Pokémon is 4x weak to a type (both types share the
-# same weakness and their multipliers multiply to 4)
-four_x_weakness_count = {}
+    data = response.json()
+    multipliers = {}
 
-# We'll collect the chosen team names for a final printout
-team = []
+    for type_entry in data["types"]:
+        type_name = type_entry["type"]["name"]
+        type_response = requests.get(f"https://pokeapi.co/api/v2/type/{type_name}", timeout=10)
+        type_response.raise_for_status()
+        type_data = type_response.json()
 
-# Ask for up to 6 Pokémon names
-i = 0
-while i < 6:
-    name = input("Enter a Pokemon name: ")
+        for weakness in type_data["damage_relations"]["double_damage_from"]:
+            multipliers[weakness["name"]] = multipliers.get(weakness["name"], 1) * 2
 
-    # Query the Pokémon endpoint (case-insensitive name is supported by API)
-    response = requests.get(f"https://pokeapi.co/api/v2/pokemon/{name}")
+        for resistance in type_data["damage_relations"]["half_damage_from"]:
+            multipliers[resistance["name"]] = multipliers.get(resistance["name"], 1) * 0.5
 
-    # Basic error handling for misspelled names
-    if response.status_code == 404:
-        print(f"Pokemon '{name}' not found. Check your spelling.")
-    else:
-        data = response.json()
+        for immunity in type_data["damage_relations"]["no_damage_from"]:
+            multipliers[immunity["name"]] = 0
 
-        # The Pokémon can have one or two types; `types` is a list
-        types = data["types"]
-
-        # `multipliers` will map an attacking type name -> numeric multiplier
-        # Example values: 2 (super effective), 0.5 (resisted), 0 (immune).
-        # If the Pokémon has two types, multipliers for the same attacking type
-        # are multiplied together (e.g., 2 * 2 = 4 if both types are weak).
-        multipliers = {}
-
-        for t in types:
-            type_name = t["type"]["name"]
-            print("Pokemon types are: " + type_name)
-
-            # Look up the type's damage relations which list which types
-            # deal double, half, or no damage to this type.
-            response2 = requests.get(f"https://pokeapi.co/api/v2/type/{type_name}")
-            data2 = response2.json()
-
-            double_damage = data2["damage_relations"]["double_damage_from"]
-            half_damage = data2["damage_relations"]["half_damage_from"]
-            no_damage = data2["damage_relations"]["no_damage_from"]
-
-            # For each attacking type that does double damage to this defender type,
-            # multiply the current multiplier by 2 (or set it to 2 if not seen yet).
-            # Reasoning: if a Pokémon has two types and both are weak to the same
-            # attacking type, multipliers multiply (2 * 2 = 4).
-            for weakness in double_damage:
-                current_type = weakness["name"]
-
-                if current_type in multipliers:
-                    multipliers[current_type] *= 2
-                else:
-                    multipliers[current_type] = 2
-
-            # For resistances, multiply by 0.5 (halved damage). If later the same
-            # attacking type is also a weakness from the other defender type, the
-            # values multiply (for example, 2 * 0.5 = 1 -> neutral overall).
-            for resistance in half_damage:
-                current_type = resistance["name"]
-
-                if current_type in multipliers:
-                    multipliers[current_type] *= 0.5
-                else:
-                    multipliers[current_type] = 0.5
-
-            # Immunities override other multipliers and set damage to 0.
-            # Example: a Ground attack does 0 damage to Flying types.
-            for immunity in no_damage:
-                current_type = immunity["name"]
-                multipliers[current_type] = 0
-
-        # After processing all defender types, `multipliers` contains the combined
-        # damage multipliers for every attacking type against this Pokémon.
-        # We now increment counters for 2x and 4x weaknesses so we can see which
-        # attacking types are common threats across the assembled team.
-        for current_weakness in multipliers:
-            # Only count clear weaknesses (2x and 4x). Resistances and immunities
-            # are ignored for the team weakness summary.
-            if multipliers[current_weakness] == 2:
-                if current_weakness in weakness_count:
-                    weakness_count[current_weakness] += 1
-                else:
-                    weakness_count[current_weakness] = 1
-
-                print(f"Added 2x {current_weakness} for {name} — count is now {weakness_count[current_weakness]}")
-
-            elif multipliers[current_weakness] == 4:
-                # A 4x weakness occurs when both defender types are weak to the
-                # same attacking type: 2 * 2 = 4. We count it both in the general
-                # `weakness_count` and separately in `four_x_weakness_count`.
-                if current_weakness in weakness_count:
-                    weakness_count[current_weakness] += 1
-                else:
-                    weakness_count[current_weakness] = 1
-
-                if current_weakness in four_x_weakness_count:
-                    four_x_weakness_count[current_weakness] += 1
-                else:
-                    four_x_weakness_count[current_weakness] = 1
-
-                print(f"Added 4x {current_weakness} for {name} — count is now {weakness_count[current_weakness]}")
-
-        # Keep the chosen Pokémon name and move to the next slot in the team
-        team.append(name)
-        i += 1
+    return multipliers
 
 
-print(team)
-print("Weakness count:")
-print(weakness_count)
+def format_name(name):
+    """Return a cleaner display name for a Pokémon."""
+    return name.strip().title()
 
-print("4x weakness count:")
-print(four_x_weakness_count)
+
+def update_team_summary(team_name, multipliers, weakness_count, four_x_weakness_count, weakness_contributors):
+    display_name = format_name(team_name)
+    for attack_type, multiplier in multipliers.items():
+        if multiplier == 2:
+            weakness_count[attack_type] = weakness_count.get(attack_type, 0) + 1
+            weakness_contributors[attack_type] = weakness_contributors.get(attack_type, "") + (
+                ", " if weakness_contributors.get(attack_type, "") else ""
+            ) + display_name
+
+        elif multiplier == 4:
+            weakness_count[attack_type] = weakness_count.get(attack_type, 0) + 1
+            four_x_weakness_count[attack_type] = four_x_weakness_count.get(attack_type, 0) + 1
+            weakness_contributors[attack_type] = weakness_contributors.get(attack_type, "") + (
+                ", " if weakness_contributors.get(attack_type, "") else ""
+            ) + display_name
+
+
+def main():
+    weakness_count = {}
+    four_x_weakness_count = {}
+    weakness_contributors = {}
+    team = []
+
+    while len(team) < 6:
+        name = input("Enter a Pokémon name (or press Enter to finish): ").strip()
+        if not name:
+            break
+
+        normalized_name = name.strip().lower()
+        if any(member.lower() == normalized_name for member in team):
+            print("That Pokémon is already in your team. Please choose a different one.")
+            continue
+
+        try:
+            multipliers = get_pokemon_multipliers(name)
+        except requests.RequestException as exc:
+            print(f"Could not fetch Pokémon '{name}': {exc}")
+            print("Please enter a valid Pokémon name.")
+            continue
+
+        update_team_summary(
+            name,
+            multipliers,
+            weakness_count,
+            four_x_weakness_count,
+            weakness_contributors,
+        )
+        team.append(format_name(name))
+
+    print("Team:", team)
+    print("Weakness count:")
+    for weakness, count in sorted(weakness_count.items(), key=lambda item: (-item[1], item[0])):
+        print(f"  {weakness}: {count}")
+
+    print("\n4x weakness count:")
+    for weakness, count in sorted(four_x_weakness_count.items(), key=lambda item: (-item[1], item[0])):
+        print(f"  {weakness}: {count}")
+
+    print("\nWeakness contributors:")
+    for weakness, contributors in sorted(weakness_contributors.items(), key=lambda item: item[0]):
+        print(f"  {weakness}: {contributors}")
+
+
+if __name__ == "__main__":
+    main()
