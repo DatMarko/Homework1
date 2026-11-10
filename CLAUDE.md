@@ -13,7 +13,9 @@ I'm on a Claude Pro plan with limited usage, so work economically.
   proves the change works, and trim long output.
 - If a fix fails twice, stop and tell me what you found instead of
   continuing to try things.
-- Keep replies short: what you changed, whether it worked, and anything I
-  need to decide. No long recaps or unrequested extras.
+- Keep replies focused: what you changed, whether it worked, and anything I
+  need to decide. Explain new concepts in plain language the first time they
+  come up. No long recaps or unrequested extras.
 - Do only what I asked. Mention other problems you notice in one line each
   rather than fixing them.
+- Project goals and how to work with me: @docs/GOALS.md
