@@ -2,6 +2,7 @@ import requests
 
 TYPE_CACHE = {}
 POKEMON_MULTIPLIER_CACHE = {}
+POKEMON_STATS_CACHE = {}
 
 
 def get_pokemon_multipliers(pokemon_name):
@@ -132,7 +133,7 @@ def get_relevant_weaknesses(weakness_count, four_x_weakness_count):
     return sorted(relevant, key=lambda item: (-(item[1]), 0 if item[2] else 1, item[0]))[:4]
 
 
-def get_candidate_pokemon(limit=75):
+def get_candidate_pokemon(limit=1000):
     """Fetch a list of Pokémon names dynamically from the PokeAPI."""
     response = requests.get(f"https://pokeapi.co/api/v2/pokemon?limit={limit}", timeout=10)
     response.raise_for_status()
@@ -140,59 +141,130 @@ def get_candidate_pokemon(limit=75):
     return [entry["name"] for entry in data["results"]]
 
 
-def score_replacement(candidate_name, weakness_count, four_x_weakness_count, resistance_count):
-    """Score how well a candidate Pokémon would balance the team’s biggest weaknesses and resistances."""
+def get_pokemon_stats(pokemon_name):
+    """Fetch base stats for a Pokémon from the PokeAPI."""
+    normalized_name = pokemon_name.strip().lower()
+    if normalized_name in POKEMON_STATS_CACHE:
+        return POKEMON_STATS_CACHE[normalized_name]
+
+    response = requests.get(f"https://pokeapi.co/api/v2/pokemon/{normalized_name}", timeout=10)
+    response.raise_for_status()
+    data = response.json()
+    total_stats = sum(stat["base_stat"] for stat in data["stats"])
+    POKEMON_STATS_CACHE[normalized_name] = total_stats
+    return total_stats
+
+
+def summarize_team_counts(team_members):
+    """Return weakness, 4x weakness, and resistance counts for a team."""
+    weakness_count = {}
+    four_x_weakness_count = {}
+    resistance_count = {}
+
+    for member in team_members:
+        for attack_type, multiplier in member["multipliers"].items():
+            if multiplier == 2:
+                weakness_count[attack_type] = weakness_count.get(attack_type, 0) + 1
+            elif multiplier == 4:
+                weakness_count[attack_type] = weakness_count.get(attack_type, 0) + 1
+                four_x_weakness_count[attack_type] = four_x_weakness_count.get(attack_type, 0) + 1
+            elif multiplier in (0.5, 0):
+                resistance_count[attack_type] = resistance_count.get(attack_type, 0) + 1
+
+    return weakness_count, four_x_weakness_count, resistance_count
+
+
+def score_swap(
+    candidate_name,
+    swap_out_name,
+    team_members,
+    weakness_count,
+    four_x_weakness_count,
+    resistance_count,
+    candidate_bst,
+):
+    """Score a candidate swap by comparing the team’s balance before and after the swap."""
     try:
         candidate_multipliers = get_pokemon_multipliers(candidate_name)
     except requests.RequestException:
         return None
 
-    relevant_weaknesses = get_relevant_weaknesses(weakness_count, four_x_weakness_count)
+    replaced_team = [member for member in team_members if member["name"].lower() != swap_out_name.lower()]
+    replaced_team.append(
+        {
+            "name": format_name(candidate_name),
+            "multipliers": candidate_multipliers,
+        }
+    )
+
+    hypothetical_weakness_count, hypothetical_four_x_weakness_count, hypothetical_resistance_count = summarize_team_counts(
+        replaced_team
+    )
+
     score = 0
     improved_against = []
-    reduced_resistance = []
 
-    for weakness, count, is_4x in relevant_weaknesses:
-        multiplier = candidate_multipliers.get(weakness, 1)
-        weight = 2 if is_4x else 1
-        if multiplier in (0.5, 0):
-            score += count * weight
-            improved_against.append(weakness)
-        elif multiplier in (2, 4):
-            score -= count * weight
-            reduced_resistance.append(weakness)
+    all_types = set(weakness_count) | set(resistance_count) | set(hypothetical_weakness_count) | set(
+        hypothetical_resistance_count
+    )
+    for attack_type in sorted(all_types):
+        current_weak = weakness_count.get(attack_type, 0)
+        current_resistance = resistance_count.get(attack_type, 0)
+        new_weak = hypothetical_weakness_count.get(attack_type, 0)
+        new_resistance = hypothetical_resistance_count.get(attack_type, 0)
+        weak_weight = 2 if four_x_weakness_count.get(attack_type, 0) > 0 else 1
+        score += (current_weak - new_weak) * weak_weight
+        score += (new_resistance - current_resistance)
 
-    for resistance, count in resistance_count.items():
-        multiplier = candidate_multipliers.get(resistance, 1)
-        if multiplier in (2, 4):
-            score -= count
-            reduced_resistance.append(resistance)
-        elif multiplier in (0.5, 0):
-            score += count
-            improved_against.append(resistance)
+        if new_weak < current_weak or new_resistance > current_resistance:
+            improved_against.append(attack_type)
+
+    score += candidate_bst / 80
 
     if score <= 0:
         return None
 
-    return score, improved_against, reduced_resistance
+    return score, improved_against[:5]
 
 
 def recommend_replacements(team_members, weakness_count, four_x_weakness_count, resistance_count, limit=5):
-    """Recommend a swap that helps balance the team’s shared weaknesses and resistances."""
+    """Recommend swaps that improve the team’s weakness/resistance balance."""
     existing = {member["name"].lower() for member in team_members}
     scored = []
 
-    for candidate in get_candidate_pokemon(limit=max(limit * 3, 75)):
+    candidates = get_candidate_pokemon(limit=1000)
+    scored_candidates = []
+    for candidate in candidates:
         if candidate.lower() in existing:
             continue
-        result = score_replacement(candidate, weakness_count, four_x_weakness_count, resistance_count)
-        if result is None:
+        try:
+            total_stats = get_pokemon_stats(candidate)
+        except requests.RequestException:
             continue
-        score, improved_against, _ = result
-        if score > 0:
-            scored.append((score, candidate, improved_against))
+        if total_stats < 440 or total_stats > 560:
+            continue
+        scored_candidates.append((total_stats, candidate))
 
-    scored.sort(key=lambda item: (-item[0], item[1]))
+    scored_candidates.sort(key=lambda item: (-item[0], item[1]))
+
+    for _, candidate in scored_candidates:
+        for member in team_members:
+            result = score_swap(
+                candidate,
+                member["name"],
+                team_members,
+                weakness_count,
+                four_x_weakness_count,
+                resistance_count,
+                get_pokemon_stats(candidate),
+            )
+            if result is None:
+                continue
+            score, improved_against = result
+            if score > 0:
+                scored.append((score, candidate, member["name"], improved_against))
+
+    scored.sort(key=lambda item: (-item[0], item[1], item[2]))
     return scored[:limit]
 
 
@@ -235,6 +307,7 @@ def main():
         team_members.append(
             {
                 "name": format_name(name),
+                "multipliers": multipliers,
                 "weaknesses": {
                     attack_type: multiplier
                     for attack_type, multiplier in multipliers.items()
@@ -267,9 +340,15 @@ def main():
     if not replacements:
         print("  None found")
     else:
-        for score, candidate, improved_against in replacements:
+        best_score, best_candidate, best_member, best_improvements = replacements[0]
+        print(
+            f"  Best swap: replace {best_member} with {format_name(best_candidate)} (score {best_score})"
+        )
+        print(f"    Improves: {', '.join(best_improvements)}")
+
+        for score, candidate, member, improved_against in replacements[1:]:
             print(
-                f"  {format_name(candidate)} (score {score}): helps balance {', '.join(improved_against)}"
+                f"  Replace {member} with {format_name(candidate)} (score {score}): {', '.join(improved_against)}"
             )
 
     print("\nWeakness contributors:")
