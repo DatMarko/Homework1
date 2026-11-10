@@ -72,7 +72,7 @@ def update_team_summary(
                 ", " if weakness_contributors.get(attack_type, "") else ""
             ) + display_name
 
-        elif multiplier in (0.5, 0):
+        elif multiplier < 1:
             resistance_count[attack_type] = resistance_count.get(attack_type, 0) + 1
             resistance_contributors[attack_type] = resistance_contributors.get(attack_type, "") + (
                 ", " if resistance_contributors.get(attack_type, "") else ""
@@ -168,7 +168,7 @@ def summarize_team_counts(team_members):
             elif multiplier == 4:
                 weakness_count[attack_type] = weakness_count.get(attack_type, 0) + 1
                 four_x_weakness_count[attack_type] = four_x_weakness_count.get(attack_type, 0) + 1
-            elif multiplier in (0.5, 0):
+            elif multiplier < 1:
                 resistance_count[attack_type] = resistance_count.get(attack_type, 0) + 1
 
     return weakness_count, four_x_weakness_count, resistance_count
